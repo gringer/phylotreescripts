@@ -129,7 +129,7 @@ getChain <- function(name, lookup){
     if(is.na(lookup[name])){
         name;
     } else {
-        c(name, getChain(lookup[name], lookup));
+        c(getChain(lookup[name], lookup), name);
     }
 }
 
@@ -137,6 +137,7 @@ hap.unadj.mat[1:10,1:10];
 
 ## generate adjusted count matrix (accounting for hierarchy)
 ## [takes about 2 mins]
+## note: back mutations are not properly modelled
 hap.adj.mat <- hap.unadj.mat * 0;
 hapGroupCounts <- hap.unadj.mat[,1] * 0;
 names(hapGroupCounts) <- rownames(hap.unadj.mat);
@@ -144,32 +145,154 @@ mutCounts <- hap.unadj.mat[1,] * 0;
 names(mutCounts) <- colnames(hap.unadj.mat);
 for(hap in rownames(hap.unadj.mat)){
     hapChain <- getChain(hap,hapParents);
-    hap.adj.mat[hapChain,] <- t(t(hap.adj.mat[hapChain,,drop=FALSE]) + hap.unadj.mat[hap,]);
+    hap.adj.mat[hap,] <- colSums(hap.unadj.mat[hapChain,,drop=FALSE]);
     hapGroupCounts[hapChain] <- hapGroupCounts[hapChain] + 1;
-    mutCounts <- mutCounts + hap.unadj.mat[hap,];
+    mutCounts <- mutCounts + colSums(hap.unadj.mat[hapChain,,drop=FALSE]);
     cat(".");
 }
+
+## order by row counts
+hap.adj.mat <- hap.adj.mat[order(-rowSums(hap.adj.mat)),];
+
+hap.adj.mat[1:10,1:10];
 
 ## sanity check on leaf node
 hap <- "A17";
 a <- hap.adj.mat[getChain(hap,hapParents),];
 rowSums(a);
+a[,colSums(a) > 0];
 ## make sure all haplotypes have at least one distinguishing mutation
-min(rowSums(hap.adj.mat));
+min(rowSums(hap.adj.mat[-grep("mt-MRCA",rownames(hap.adj.mat)),]));
 
 ## p(mutation | haplogroup)
-hap.adj.rowprop <- hap.adj.mat / rowSums(hap.adj.mat);
+## -- I'm not quite sure what this means
+##hap.adj.rowprop <- hap.adj.mat / rowSums(hap.adj.mat);
 
-## note: p(haplogroup | mutation) probably isn't reliable, as most
-## novel haplogroups are not discovered by a hypothesis-free
-## approach. That's okay, as Bayes theorem can be used to approximate
-## this (and work out how reliable it is)
-#### not working...
-####hap.adj.colprop <- t(t(hap.adj.mat) / colSums(hap.adj.mat));
+## p(haplogroup | mutation) probably isn't reliable, but this is an approximation
+hap.adj.colprop <- t(t(hap.adj.mat) / colSums(hap.adj.mat));
 
 ## p(haplogroup)
-hap.prop <- hapGroupCounts / hapGroupCounts["mt-MRCA"];
+##hap.prop <- hapGroupCounts / hapGroupCounts["mt-MRCA"];
+## start with the simple definition
+hap.prop <- 1 / length(hapGroupCounts);
+hap.nums <- length(hapGroupCounts);
 
 ## p(mutation)
 mut.prop <- mutCounts / sum(mutCounts);
+mut.nums <- length(mutCounts);
 
+
+## it is assumed (for now) that undeclared variants are not indicative of a haplotype
+
+## okay, now to try it on KCCG data
+
+inFile.KCCG <- "/data/all/david/mitochondria/bam_fromKCCG/OVLNormalised_STARout_KCCG_called.vcf.gz";
+KCCG.vcf.df <- read.delim(inFile.KCCG, stringsAsFactors=FALSE,
+                          skip=grep("^#CHROM",readLines(inFile.KCCG))-1);
+colnames(KCCG.vcf.df)[1] <- "CHROM";
+colnames(KCCG.vcf.df)[grep("^FR",colnames(KCCG.vcf.df))] <- sub("_.*$","",colnames(KCCG.vcf.df)[grep("^FR",colnames(KCCG.vcf.df))]);
+frNames <- grep("^FR",colnames(KCCG.vcf.df), value=TRUE);
+KCCG.vcf.df[,paste0(frNames,".GT")] <- sapply(KCCG.vcf.df[,frNames],sub,pattern=":.*$",replacement="");
+KCCG.vcf.df[,paste0(frNames,".DPRr")] <- as.numeric(sapply(KCCG.vcf.df[,frNames],sub,pattern="^.*:(.*),.*$",replacement="\\1"));
+KCCG.vcf.df[,paste0(frNames,".DPRa")] <- as.numeric(sapply(KCCG.vcf.df[,frNames],sub,pattern="^.*,",replacement=""));
+KCCG.vcf.df[,"AAF"] <- rowSums(KCCG.vcf.df[,paste0(frNames,".DPRa")]) /
+    (rowSums(KCCG.vcf.df[,paste0(frNames,".DPRa")]) + rowSums(KCCG.vcf.df[,paste0(frNames,".DPRr")]));
+table(unlist(KCCG.vcf.df[,paste0(frNames,".GT")]))
+head(unlist(KCCG.vcf.df[,paste0(frNames,".DPRr")]))
+head(KCCG.vcf.df);
+str(KCCG.vcf.df);
+KCCG.vcf.df$refSig <- paste(sprintf("%05d",KCCG.vcf.df$POS),KCCG.vcf.df$REF,KCCG.vcf.df$REF,sep=";");
+KCCG.vcf.df$altSig <- paste(sprintf("%05d",KCCG.vcf.df$POS),KCCG.vcf.df$REF,KCCG.vcf.df$ALT,sep=";");
+KCCG.vcf.df[,paste0(frNames,".Sig")] <- sapply(KCCG.vcf.df[,paste0(frNames,".GT")],
+                                               function(x){ifelse(x == "1/1",KCCG.vcf.df$altSig, KCCG.vcf.df$refSig)});
+KCCG.vcf.df$cM <- 0;
+KCCG.vcf.df[,paste0(frNames,".SigGT")] <- sapply(KCCG.vcf.df[,paste0(frNames,".GT")],
+                                                 function(x){ifelse(x == "1/1"," C C",
+                                                                    ifelse(x == "0/0"," A A",
+                                                                           ifelse(x %in% c("0/1","1/0")," A C", " 0 0")))});
+KCCG.vcf.df[["#mt"]] <- "MT";
+sum(KCCG.vcf.df$altSig %in% names(mut.prop));
+(novel.vars.KCCG <- KCCG.vcf.df$altSig[!KCCG.vcf.df$altSig %in% names(mut.prop)]);
+##write.table(KCCG.vcf.df[!KCCG.vcf.df$altSig %in% names(mut.prop),c("altSig","AAF")], row.names=FALSE, sep="\t",
+##            quote=FALSE);
+
+write.table(KCCG.vcf.df[,c("#mt","altSig","cM","POS",paste0(frNames,".SigGT"))], file="/data/all/david/mitochondria/KCCG_gt_matrix.tped",
+            row.names=FALSE, col.names=TRUE, quote=FALSE);
+write.table(cbind(frNames,1,0,0,0,0), file="/data/all/david/mitochondria/KCCG_gt_matrix.tfam", quote=FALSE,
+            row.names=FALSE, col.names=FALSE);
+
+test.id <- paste0(frNames[1],".Sig");
+test.vars <- KCCG.vcf.df[,paste0(frNames,".Sig")];
+
+KCCG.haplotypes <- apply(test.vars,2,function(x){
+    priors <- rowSums(log(hap.adj.colprop[,x[x %in% colnames(hap.adj.colprop)]]+0.5/mut.nums));
+    ## find the most likely haplogroup(s) given expected mutation frequencies
+    best <- names(which(priors == max(priors)));
+    ## when there's disagreement, pick the haplogroup with the most members
+    names(which(hapGroupCounts[best] == max(hapGroupCounts[best])));
+});
+names(KCCG.haplotypes) <- sub(".Sig$","",names(KCCG.haplotypes));
+
+KCCG.lnlike <- apply(test.vars,2,function(x){
+    priors <- rowSums(log(hap.adj.colprop[,x[x %in% colnames(hap.adj.colprop)]]+0.5/mut.nums));
+    ## find the most likely haplogroup(s) given expected mutation frequencies
+    best <- names(which(priors == max(priors)));
+    ## when there's disagreement, pick the haplogroup with the most members
+    priors[names(which(hapGroupCounts[best] == max(hapGroupCounts[best])))];
+});
+names(KCCG.lnlike) <- sub(".Sig$","",names(KCCG.lnlike));
+
+
+KCCG.haps.df <- read.csv("/mnt/ihbi_ngs/KCCG_deccles/KCCGid_UUID_mapping.csv");
+KCCG.haps.df <- KCCG.haps.df[order(KCCG.haps.df$KCCGID),];
+KCCG.haps.df$patID[is.na(KCCG.haps.df$patID)] <- 0;
+KCCG.haps.df$matID[is.na(KCCG.haps.df$matID)] <- 0;
+KCCG.haps.df$WGS.hap <- KCCG.haplotypes[KCCG.haps.df$KCCGID];
+KCCG.haps.df$WGS.lnlike <- round(KCCG.lnlike[KCCG.haps.df$KCCGID],2);
+write.csv(KCCG.haps.df, file="/data/all/david/mitochondria/KCCG_WGS_haplotypes.csv", row.names=FALSE);
+
+
+inFile.IT <- "/data/all/david/mitochondria/STARout_bams/OVLNormalised_STARout_IonTorrentRuns_1-25_called.vcf.gz";
+IT.vcf.df <- read.delim(inFile.IT, stringsAsFactors=FALSE,
+                          skip=grep("^#CHROM",readLines(inFile.IT))-1);
+colnames(IT.vcf.df)[1] <- "CHROM";
+itNames <- grep("\\.bam$",colnames(IT.vcf.df), value=TRUE);
+IT.vcf.df[,paste0(itNames,".GT")] <- sapply(IT.vcf.df[,itNames],sub,pattern=":.*$",replacement="");
+IT.vcf.df$refSig <- paste(sprintf("%05d",IT.vcf.df$POS),IT.vcf.df$REF,IT.vcf.df$REF,sep=";");
+IT.vcf.df$altSig <- paste(sprintf("%05d",IT.vcf.df$POS),IT.vcf.df$REF,IT.vcf.df$ALT,sep=";");
+IT.vcf.df[,paste0(itNames,".Sig")] <- sapply(IT.vcf.df[,paste0(itNames,".GT")],
+                                             function(x){ifelse(x == "1/1",IT.vcf.df$altSig, IT.vcf.df$refSig)});
+IT.vcf.df[,paste0(itNames,".DPRr")] <- as.numeric(sapply(IT.vcf.df[,itNames],sub,pattern="^.*:(.*),.*$",replacement="\\1"));
+IT.vcf.df[,paste0(itNames,".DPRa")] <- as.numeric(sapply(IT.vcf.df[,itNames],sub,pattern="^.*,",replacement=""));
+IT.vcf.df[,"AAF"] <- rowSums(IT.vcf.df[,paste0(itNames,".DPRa")]) /
+    (rowSums(IT.vcf.df[,paste0(itNames,".DPRa")]) + rowSums(IT.vcf.df[,paste0(itNames,".DPRr")]));
+IT.vcf.df$cM <- 0;
+IT.vcf.df[,paste0(itNames,".SigGT")] <- sapply(IT.vcf.df[,paste0(itNames,".GT")],
+                                                 function(x){ifelse(x == "1/1"," C C",
+                                                                    ifelse(x == "0/0"," A A",
+                                                                           ifelse(x %in% c("0/1","1/0")," A C", " 0 0")))});
+IT.vcf.df[["#mt"]] <- "MT";
+
+
+str(IT.vcf.df);
+sum(IT.vcf.df$altSig %in% names(mut.prop));
+novel.vars.IT <- IT.vcf.df$altSig[!IT.vcf.df$altSig %in% names(mut.prop)];
+
+cbind(unlist(IT.vcf.df[2,paste0(itNames,".Sig")]),
+      unlist(IT.vcf.df[2,paste0(itNames,".GT")]),
+      unlist(IT.vcf.df[3,paste0(itNames,".Sig")]),
+      unlist(IT.vcf.df[3,paste0(itNames,".GT")]));
+
+cat(novel.vars.KCCG,"\n");
+cat(novel.vars.IT,"\n");
+
+write.table(IT.vcf.df[,c("#mt","altSig","cM","POS",paste0(itNames,".SigGT"))], file="/data/all/david/mitochondria/IT_gt_matrix.tped",
+            row.names=FALSE, col.names=TRUE, quote=FALSE);
+write.table(cbind(itNames,1,0,0,0,0), file="/data/all/david/mitochondria/IT_gt_matrix.tfam", quote=FALSE,
+            row.names=FALSE, col.names=FALSE);
+
+
+write.table(IT.vcf.df[(!IT.vcf.df$altSig %in% names(mut.prop)) & (IT.vcf.df$AAF > 0.05),c("altSig","AAF")], row.names=FALSE, sep="\t",
+            quote=FALSE);
+
+##(IT.vcf.df[!IT.vcf.df$altSig %in% names(mut.prop),c("altSig","QUAL")]);
