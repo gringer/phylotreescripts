@@ -210,18 +210,17 @@ KCCG.vcf.df[,paste0(frNames,".SigGT")] <- sapply(KCCG.vcf.df[,paste0(frNames,".G
                                                  function(x){ifelse(x == "1/1"," C C",
                                                                     ifelse(x == "0/0"," A A",
                                                                            ifelse(x %in% c("0/1","1/0")," A C", " 0 0")))});
-KCCG.vcf.df[["#mt"]] <- "MT";
+KCCG.vcf.df[["#CHROM"]] <- "26";
 sum(KCCG.vcf.df$altSig %in% names(mut.prop));
 (novel.vars.KCCG <- KCCG.vcf.df$altSig[!KCCG.vcf.df$altSig %in% names(mut.prop)]);
 ##write.table(KCCG.vcf.df[!KCCG.vcf.df$altSig %in% names(mut.prop),c("altSig","AAF")], row.names=FALSE, sep="\t",
 ##            quote=FALSE);
 
-write.table(KCCG.vcf.df[,c("#mt","altSig","cM","POS",paste0(frNames,".SigGT"))], file="/data/all/david/mitochondria/KCCG_gt_matrix.tped",
+write.table(KCCG.vcf.df[,c("#CHROM","altSig","cM","POS",paste0(frNames,".SigGT"))], file="/data/all/david/mitochondria/KCCG_gt_matrix.tped",
             row.names=FALSE, col.names=TRUE, quote=FALSE);
 write.table(cbind(frNames,1,0,0,0,0), file="/data/all/david/mitochondria/KCCG_gt_matrix.tfam", quote=FALSE,
             row.names=FALSE, col.names=FALSE);
 
-test.id <- paste0(frNames[1],".Sig");
 test.vars <- KCCG.vcf.df[,paste0(frNames,".Sig")];
 
 KCCG.haplotypes <- apply(test.vars,2,function(x){
@@ -271,8 +270,51 @@ IT.vcf.df[,paste0(itNames,".SigGT")] <- sapply(IT.vcf.df[,paste0(itNames,".GT")]
                                                  function(x){ifelse(x == "1/1"," C C",
                                                                     ifelse(x == "0/0"," A A",
                                                                            ifelse(x %in% c("0/1","1/0")," A C", " 0 0")))});
-IT.vcf.df[["#mt"]] <- "MT";
+IT.vcf.df[["#CHROM"]] <- "26";
 
+test.vars <- IT.vcf.df[,paste0(itNames,".Sig")];
+
+
+IT.haplotypes <- apply(test.vars,2,function(x){
+    priors <- rowSums(log(hap.adj.colprop[,x[x %in% colnames(hap.adj.colprop)]]+0.5/mut.nums));
+    ## find the most likely haplogroup(s) given expected mutation frequencies
+    best <- names(which(priors == max(priors)));
+    ## when there's disagreement, pick the haplogroup with the most members
+    names(which(hapGroupCounts[best] == max(hapGroupCounts[best])));
+});
+names(IT.haplotypes) <- sub(".Sig$","",names(IT.haplotypes));
+
+IT.lnlike <- apply(test.vars,2,function(x){
+    priors <- rowSums(log(hap.adj.colprop[,x[x %in% colnames(hap.adj.colprop)]]+0.5/mut.nums));
+    ## find the most likely haplogroup(s) given expected mutation frequencies
+    best <- names(which(priors == max(priors)));
+    ## when there's disagreement, pick the haplogroup with the most members
+    priors[names(which(hapGroupCounts[best] == max(hapGroupCounts[best])))];
+});
+names(IT.lnlike) <- sub(".Sig$","",names(IT.lnlike));
+
+IT.runmap.df <- read.csv("/data/all/david/mitochondria/db/UUID_Run_Barcodes_Mitochondria.csv");
+head(IT.runmap.df);
+IT.runmap.df$sig <- paste0("run",IT.runmap.df$Sequencing.run,"_IonXpress_",IT.runmap.df$Barcode);
+
+IT.haps.df <- data.frame(IT.runID = names(IT.lnlike), IT.hap = IT.haplotypes[names(IT.lnlike)], IT.lnlike = IT.lnlike);
+rownames(IT.haps.df) <- NULL;
+IT.haps.df$IT.runID <- sub(".bam$","",sub("IonXpress_0+","IonXpress_",sub("run0","run",IT.haps.df$IT.runID)));
+IT.haps.df$IT.ID <- sub("\\.[12]_","_",IT.haps.df$IT.runID);
+## Sanity check -- number of non-matching IDs should be low (~9)
+IT.haps.df$IT.ID[which(!(IT.haps.df$IT.ID %in% IT.runmap.df$sig))];
+## Add in UUID
+IT.haps.df$UUID <- IT.runmap.df$UUID[match(IT.haps.df$IT.ID,IT.runmap.df$sig)];
+uuid.df <- read.csv("/data/all/david/genabel/NI_UUID_Ped_2012-Oct-23.csv");
+## Add in patID, matID
+IT.haps.df$patID <- uuid.df$patID[match(IT.haps.df$UUID,uuid.df$UUID)];
+IT.haps.df$matID <- uuid.df$matID[match(IT.haps.df$UUID,uuid.df$UUID)];
+IT.haps.df$patID[is.na(IT.haps.df$patID)] <- 0;
+IT.haps.df$matID[is.na(IT.haps.df$matID)] <- 0;
+## reorder columns
+IT.haps.df <- IT.haps.df[order(IT.haps.df$UUID),c("IT.runID","IT.ID","UUID","patID","matID","IT.hap","IT.lnlike")];
+
+write.csv(IT.haps.df, file="/data/all/david/mitochondria/IT_run1-25_haplotypes.csv", row.names=FALSE);
 
 str(IT.vcf.df);
 sum(IT.vcf.df$altSig %in% names(mut.prop));
@@ -286,7 +328,7 @@ cbind(unlist(IT.vcf.df[2,paste0(itNames,".Sig")]),
 cat(novel.vars.KCCG,"\n");
 cat(novel.vars.IT,"\n");
 
-write.table(IT.vcf.df[,c("#mt","altSig","cM","POS",paste0(itNames,".SigGT"))], file="/data/all/david/mitochondria/IT_gt_matrix.tped",
+write.table(IT.vcf.df[,c("#CHROM","altSig","cM","POS",paste0(itNames,".SigGT"))], file="/data/all/david/mitochondria/IT_gt_matrix.tped",
             row.names=FALSE, col.names=TRUE, quote=FALSE);
 write.table(cbind(itNames,1,0,0,0,0), file="/data/all/david/mitochondria/IT_gt_matrix.tfam", quote=FALSE,
             row.names=FALSE, col.names=FALSE);
