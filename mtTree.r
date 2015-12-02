@@ -110,5 +110,9 @@ tree.df$normalised <-
 tree.df$name <- gsub("\\\"","\\'\\'",tree.df$name);
 tree.df$parent <- gsub("\\\"","\\'\\'",tree.df$parent);
 
+## fix up L1 parents
+tree.df$parent[is.na(tree.df$parent)] <- "mt-MRCA";
+tree.df$parent[tree.df$name == "mt-MRCA"] <- NA;
+
 write.csv(tree.df, "mtDNA_haplogroups.csv", row.names = FALSE);
 
